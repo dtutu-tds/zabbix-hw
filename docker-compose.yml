@@ -1,0 +1,85 @@
+version: "3.8"
+
+networks:
+  zbx-net: {}
+
+services:
+  # ---------- СУБД ----------
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB:      ${POSTGRES_DB}
+      POSTGRES_USER:    ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./volumes/pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - zbx-net
+
+  # ---------- Zabbix-server ----------
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql
+    environment:
+      DB_SERVER_HOST:   postgres
+      POSTGRES_USER:    ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      ZBX_STARTPOLLERS: 5
+    depends_on:
+      - postgres
+    ports:
+      - "10051:10051"           # наружу (по-желанию)
+    restart: unless-stopped
+    networks:
+      - zbx-net
+
+  # ---------- Web ----------
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql
+    environment:
+      DB_SERVER_HOST:   postgres
+      POSTGRES_USER:    ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PHP_TZ:           ${PHP_TZ}
+      ZBX_SERVER_HOST:  zabbix-server
+      ZBX_SERVER_NAME:  ${ZBX_SERVER_NAME}
+    depends_on:
+      - zabbix-server
+    ports:
+      - "8080:8080"            # HTTP
+      - "4433:8443"            # HTTPS (опц.)
+    restart: unless-stopped
+    networks:
+      - zbx-net
+
+  # ---------- Агент, видящий «железо» хоста ----------
+  agent_host:
+    image: zabbix/zabbix-agent2
+    container_name: agent_host
+    network_mode: host            # один-единственный!
+    pid: host                     # /proc хоста
+    environment:
+      ZBX_SERVER_HOST: 127.0.0.1  # сервер доступен через --publish 10051
+      ZBX_SERVER_ACTIVE: 127.0.0.1
+      ZBX_HOSTNAME: linux-host    # EXACTLY так вписывайте в UI!
+      ZBX_DEBUGLEVEL: 4 
+    volumes:
+      - /:/rootfs:ro              # LLD дисков, cgroups и т.д.
+    restart: unless-stopped
+
+  # ---------- Агент внутри docker-сети ----------
+  agent_container:
+    image: zabbix/zabbix-agent2
+    container_name: agent_container
+    hostname: docker-host_2       # удобнее искать в логах
+    environment:
+      ZBX_SERVER_HOST:   zabbix-server        # DNS-имя сервиса
+      ZBX_SERVER_ACTIVE: zabbix-server
+      ZBX_HOSTNAME:      docker-host_2
+      ZBX_DEBUGLEVEL: 4 
+    expose:
+      - "10050"                      # внутри сети хватает EXPOSE
+    restart: unless-stopped
+    networks:
+      - zbx-net

@@ -1,0 +1,9 @@
+# enviroment
+.env
+
+#volumes
+volumes/
+
+#
+package-lock.json
+
